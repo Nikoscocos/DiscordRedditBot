@@ -1,4 +1,5 @@
-import discord, asyncio, praw, random, logging
+import discord, asyncio, praw, random, logging, configparser
+import defusedxml.ElementTree as defusedetree
 import xml.etree.ElementTree as etree
 from html import escape
 from time import gmtime, strftime, time
@@ -24,11 +25,15 @@ def debug(debugMsg):
 #                                                                                          #
 # ######################################################################################## #
 
+config = configparser.ConfigParser()
+config.read("rule34_bot.cfg")
+
 waitingToSend = False # Making a global boolean to be used in send_random_message and choose_random_message.
-xmlfile = "/var/www/html/botdata.xml" # The location of the XML file to log data to.
-r = praw.Reddit(client_id="your client id",client_secret="your client secret",user_agent="your user agent")
+xmlfile = config["Data_Logging"]["xml_file"] # The location of the XML file to log data to.
+logfile = config["Data_Logging"]["log_file"] # The location of the log file (becoming increasingly irrelevant).
+reddit = praw.Reddit(client_id=config["Reddit"]["client_id"],client_secret=config["Reddit"]["client_secret"],user_agent=config["Reddit"]["user_agent"]) # Initalising Reddit praw.
 client = discord.Client() # Creating the Discord Client object (the bot)
-tree = etree.parse(xmlfile) # Parsing the XML into a variable
+tree = defusedetree.parse(xmlfile) # Parsing the XML into a variable
 root = tree.getroot() # Parsing the root of the XML into a variable.
 
 # ###################################################### #
@@ -38,9 +43,9 @@ root = tree.getroot() # Parsing the root of the XML into a variable.
 # ###################################################### #
 
 try:
-    f = open("/var/log/discordBots/redditBot.log","r")
+    f = open(logfile,"r")
 except IOError:
-    f = open("/var/log/discordBots/redditBot.log","w")
+    f = open(logfile,"w")
 finally:
     f.close()
 
@@ -66,7 +71,7 @@ def send_random_message(channel): # This function is triggered whenever someone 
 def choose_random_message(channel):
     global waitingToSend
     waitingToSend = False # Make it so send_random_message can be executed again.
-    x = random.randrange(3) # Choose a number between 0 and the number before the number in the brackets.
+    x = random.randrange(5) # Choose a number between 0 and the number before the number in the brackets.
     print("[+] Time has been reached. Sending message ID: " + str(x))
     if x == 0: # Just say "I love the water"
         yield from client.send_message(channel, "I love the water.")
@@ -81,11 +86,37 @@ def choose_random_message(channel):
                 i += 1
     elif x == 2: # Make the bot perform !r34 to itself.
         yield from client.send_message(channel, "!r34")
-        post = r.subreddit('rule34').random()
-        yield from asyncio.sleep(0.5)
+        post = reddit.subreddit('rule34').random()
+        yield from asyncio.sleep(0.6)
         add_count(client.user, "rule34", True)
         yield from client.send_message(channel, post.url)
-        
+    elif x == 3: # Make the bot perform !reddit using a random subreddit.
+        randomSub = reddit.random_subreddit(nsfw=True)
+        print("[+] Retrieving a random NSFW subreddit: " + randomSub.display_name)
+        yield from client.send_message(channel, "!reddit " + randomSub.display_name)
+        post = randomSub.random()
+        yield from asyncio.sleep(0.6)
+        add_count(client.user, randomSub.display_name, True)
+        yield from client.send_message(channel, post.url)
+    elif x == 4:
+        post = reddit.subreddit('subredditsimulator').random()
+        print("[+] Got post from /r/subredditsimulator: https://www.reddit.com" + post.permalink)
+        yield from client.send_message(channel, post.title)
+
+# ################################ #
+#                                  #
+# Working with MySQL (logging data). #
+#                                  #
+# ################################ #
+
+def mysql_update_user(usrObj):
+    pass
+
+def mysql_add_count(usrObj, subName, subExists):
+    pass
+
+def mysql_check_element_exists(userID, subName):
+    pass
 
 # ################################ #
 #                                  #
@@ -181,10 +212,10 @@ def on_message(message): # Event: When the bot sees a message in a channel.
         return
 
     if message.content.lower().startswith('!rule34') or message.content.lower().startswith('!r34'):
-        sub = r.subreddit('rule34')
+        sub = reddit.subreddit('rule34')
         post = sub.random() # Get a random post from the sub /r/rule34.
         print("[+] '" + message.author.name + "' asked for a random post on '/r/rule34': " + post.url)
-        with open("/var/log/discordBots/redditBot.log","a") as f: # Log this event to a file.
+        with open(logfile,"a") as f: # Log this event to a file.
             f.write("["+strftime("%Y-%m-%d %H:%M:%S", gmtime())+"] '" + message.author.name + "' asked for a random post on '/r/rule34': " + post.url + "\n")
         add_count(message.author, "rule34", True) # Add 1 to this subreddit value under this user in the XML file.
         yield from client.send_message(message.channel, post.url)
@@ -192,10 +223,14 @@ def on_message(message): # Event: When the bot sees a message in a channel.
 
     elif message.content.lower().startswith('!reddit '):
         subToCheck = message.content.split(' ')[1].lower()
+        if len(subToCheck) > 20: # Subreddit names are a max 20 characters in length, so no point searching for one with a longer name.
+            yield from client.send_message(message.channel, "That name is too long for a subreddit. Please try a shorter name.")
+            yield from send_random_message(message.channel)
+            return
         try:
-            post = r.subreddit(subToCheck).random() # Get a random post from the sub /r/rule34.
+            post = reddit.subreddit(subToCheck).random() # Get a random post from the sub /r/rule34.
             print("[+] '" + message.author.name + "' asked for a random post on '/r/" + subToCheck + "': " + post.url)
-            with open("/var/log/discordBots/redditBot.log","a") as f: # Log this event to a file.
+            with open(logfile,"a") as f: # Log this event to a file.
                 f.write("["+strftime("%Y-%m-%d %H:%M:%S", gmtime())+"] '" + message.author.name + "' asked for a random post on '/r/" + subToCheck + "': " + post.url + "\n")
             add_count(message.author, subToCheck, True) # Add 1 to this subreddit value under this user in the XML file.
             yield from client.send_message(message.channel, post.url)
@@ -237,4 +272,4 @@ def on_member_update(old, member): # Event: When a member updates their nickname
     update_user(member)
 
 print("Starting...") # Start up the bot.
-client.run('your discords bot token')
+client.run(config["Discord"]["discord_token"])
